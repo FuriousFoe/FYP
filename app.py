@@ -88,6 +88,10 @@
 
 
 # # Base 64 encoding wala code which works
+# Thissss fuckingggg worked, on the test.py while using live screen
+# it has a latency of 35-46 seconds. Imma really happy
+
+
 # from fastapi import FastAPI, HTTPException
 # from pydantic import BaseModel
 # import numpy as np
@@ -109,9 +113,11 @@
 # # Initialize MediaPipe holistic model
 # mp_holistic = mp.solutions.holistic
 #
+#
 # # Define input schema
 # class ImageData(BaseModel):
 #     image: str  # Base64-encoded image string
+#
 #
 # # Store previous frames for sequence prediction
 # sequence = []
@@ -120,6 +126,7 @@
 # displayed_word = ""
 # frames_required = 5  # Number of frames required for a stable word display
 # threshold = 0.8  # Confidence threshold
+#
 #
 # # Function to extract keypoints from MediaPipe results
 # def extract_keypoints(results):
@@ -135,6 +142,7 @@
 #     keypoints = np.concatenate([pose, face, lh, rh])  # Ensures 1662 features
 #     return keypoints
 #
+#
 # @app.post("/predict")
 # async def predict_keypoints(data: ImageData):
 #     global sequence, predictions, sentence, displayed_word
@@ -148,6 +156,10 @@
 #         if frame is None:
 #             raise HTTPException(status_code=400, detail="Invalid image data")
 #
+#         # Debugging step: Save the decoded image
+#         cv2.imwrite("debug_image.jpg", frame)
+#         print("Debug: Image saved as debug_image.jpg")
+#
 #         # Convert frame to RGB
 #         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 #
@@ -155,14 +167,19 @@
 #         with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
 #             results = holistic.process(image)
 #
-#         # Extract keypoints
+#         # Debugging step: Check if keypoints were detected
 #         keypoints = extract_keypoints(results)
+#         print("Extracted Keypoints (first 10):", keypoints[:10])
+#
 #         sequence.append(keypoints)
 #         sequence = sequence[-30:]  # Keep last 30 frames
 #
 #         # Only predict if we have 30 frames
 #         if len(sequence) == 30:
 #             res = model.predict(np.expand_dims(sequence, axis=0))[0]
+#
+#             # Debugging step: Print raw model predictions
+#             print("Model Prediction Probabilities:", res)
 #
 #             if np.max(res) > threshold:
 #                 predicted_word = actions[np.argmax(res)]
@@ -182,9 +199,11 @@
 #     except Exception as e:
 #         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
-#########################################################################################################################################################
 
-# experimenting with Batch Frame Processing and Optimized MediaPipe Processing
+#########################################################################################################################################################
+# # Above code but optimized
+# it has a latency of 5-6 seconds. Imma really happy
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import numpy as np
@@ -194,32 +213,32 @@ import tensorflow as tf
 import base64
 from collections import Counter
 
-# Load trained LSTM model
+# Load trained LSTM model once (avoid reloading per request)
 model = tf.keras.models.load_model("model.h5")
 
 # Initialize FastAPI
 app = FastAPI()
 
-# Define action labels
+# Define action labels (Modify as per your model)
 actions = ["Hello", "I love you", "Thanks"]
 
-# Initialize MediaPipe holistic **once** (to avoid re-initializing in every request)
+# Initialize MediaPipe holistic model once (persistent instance)
 mp_holistic = mp.solutions.holistic
-holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+holistic_model = mp_holistic.Holistic(min_detection_confidence=0.3, min_tracking_confidence=0.3)
 
-# Define input schema for multiple frames
+# Define input schema
 class ImageData(BaseModel):
-    frames: list[str]  # List of Base64-encoded images
+    image: str  # Base64-encoded image string
 
 # Store previous frames for sequence prediction
 sequence = []
 predictions = []
 sentence = []
 displayed_word = ""
-frames_required = 5
-threshold = 0.8
+frames_required = 5  # Number of frames required for a stable word display
+threshold = 0.8  # Confidence threshold
 
-# Function to extract keypoints from MediaPipe results
+# Function to extract all 1662 keypoints (unchanged)
 def extract_keypoints(results):
     pose = np.array([[res.x, res.y, res.z, res.visibility] for res in
                      results.pose_landmarks.landmark]).flatten() if results.pose_landmarks else np.zeros(132)
@@ -238,29 +257,29 @@ async def predict_keypoints(data: ImageData):
     global sequence, predictions, sentence, displayed_word
 
     try:
-        for image_base64 in data.frames:
-            # Decode Base64 string to OpenCV image
-            image_data = base64.b64decode(image_base64)
-            np_image = np.frombuffer(image_data, np.uint8)
-            frame = cv2.imdecode(np_image, cv2.IMREAD_COLOR)
+        # Decode Base64 string to OpenCV image
+        image_data = base64.b64decode(data.image)
+        np_image = np.frombuffer(image_data, np.uint8)
+        frame = cv2.imdecode(np_image, cv2.IMREAD_COLOR)
 
-            if frame is None:
-                raise HTTPException(status_code=400, detail="Invalid image data")
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
 
-            # Convert frame to RGB
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Convert frame to RGB
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # Process image with MediaPipe (reusing global holistic model)
-            results = holistic.process(image)
+        # Process image with persistent MediaPipe model
+        results = holistic_model.process(image)
 
-            # Extract keypoints
-            keypoints = extract_keypoints(results)
-            sequence.append(keypoints)
-            sequence = sequence[-30:]  # Keep last 30 frames
+        # Extract keypoints
+        keypoints = extract_keypoints(results)
+        sequence.append(keypoints)
+        sequence = sequence[-30:]  # Keep last 30 frames
 
-        # Only predict if we have 30 frames
+        # Predict only when we have 30 frames
         if len(sequence) == 30:
-            res = model.predict(np.expand_dims(sequence, axis=0))[0]
+            sequence_array = np.expand_dims(sequence, axis=0)
+            res = model.predict(sequence_array, verbose=0)[0]  # Silent prediction
 
             if np.max(res) > threshold:
                 predicted_word = actions[np.argmax(res)]
@@ -279,3 +298,5 @@ async def predict_keypoints(data: ImageData):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+
+#########################################################################################################################################################
